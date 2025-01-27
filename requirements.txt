@@ -2,3 +2,7 @@ aiogram==2.25.2
 python-dotenv
 yandex-cloud-ml-sdk
 yandex-speechkit
+pymorphy2
+chromadb
+nltk
+googletrans

@@ -1,6 +1,6 @@
 import json
 
-def create_chunks(file_path):
+def create_chunks(file_path='data.json'):
 
     with open(file_path, 'r', encoding='utf-8') as file:
         data = json.load(file)
@@ -63,5 +63,25 @@ def create_json_chunks(file_path='data.json'):
         data_chunks.append(chunk)
 
     return data_chunks
+
+user_dialogues = [
+    {"user": "Расскажи мне про нижний парк"},
+    {"bot": "Ну он норм"}
+]
+
+def parse_dialogue(dialogue):
+    dialogue_str = ""
+
+    for item in dialogue:
+        if "user" in item:
+            dialogue_str += "Собщение пользователя:\n"
+            dialogue_str += item["user"] + "\n"
+        else:
+            dialogue_str += "Собщение бота:\n"
+            dialogue_str += item["bot"] + "\n"
+
+        dialogue_str += "---------------------------------------\n\n"
+
+    return dialogue_str
 
 

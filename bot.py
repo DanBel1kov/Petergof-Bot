@@ -19,7 +19,12 @@ from yandex_cloud_ml_sdk import AsyncYCloudML, YCloudML
 from yandex_cloud_ml_sdk.search_indexes import StaticIndexChunkingStrategy, TextSearchIndexType
 from speechkit import model_repository, configure_credentials, creds
 from speechkit.stt import AudioProcessingType
+from chroma import init_chroma
 from raptor import DataEnlarger
+from utils import create_chunks
+
+import chromadb
+from chromadb.config import Settings
 
 load_dotenv()
 bot = Bot(token=getenv('TOKEN'))
@@ -32,7 +37,8 @@ bot.sdk = None
 bot.files = None
 CIS_COUNTRIES = ['ru', 'ua', 'by', 'kz', 'kg', 'am', 'uz', 'tj', 'az', 'md']
 admin_chat = -1002411793280
-
+COLLECTION_NAME = "peterhof_docs"
+bot.chroma_collection = None
 
 async def files_delete():
     async for file in bot.sdk.files.list():
@@ -87,83 +93,83 @@ async def ru_to_en(text):
     async with Translator() as translator:
         return (await translator.translate(text, src='ru', dest='en')).text
 
+YANDEX_FOLDER_ID = getenv('FOLDER_ID')
+YANDEX_AUTH = getenv('YANDEX_AUTH')
 
 async def get_answer(question: str, user_id: int) -> str:
-    operation = await bot.sdk.search_indexes.create_deferred(
-        bot.files,
-        index_type=TextSearchIndexType(
-            chunking_strategy=StaticIndexChunkingStrategy(
-                max_chunk_size_tokens=700,
-                chunk_overlap_tokens=300,
-            )
-        )
+    sdk = YCloudML(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_AUTH)
+    llm_model = sdk.models.completions("yandexgpt")
+
+    # 1. Поиск документов
+    results = bot.chroma_collection.query(
+        query_texts=[question],
+        n_results=3
     )
-    search_index = await operation
-    tool = bot.sdk.tools.search_index(search_index)
+    retrieved_docs = results.get('documents', [[]])[0]
+    relevant_context = "\n\n".join(retrieved_docs)
+
+    # 2. История диалога
     memory = bot.user_settings[str(user_id)]['memory']
+
     random_route = '' if random.randint(1, 5) != 1 else 'Также обязательно предложите пользователю составить индивидуальный маршрут и упомяните точную команду: /route'
-    prompt = \
-f'''
-1. Контекст и цель:
-    - Вы являетесь виртуальным гидом для посетителей музея-заповедника Петергоф.
-    - Ваша цель — предоставлять исчерпывающие ответы на вопросы пользователей относительно объектов музея и маршрутов, основываясь на доступной базе данных. Поддерживайте интерес посетителя к посещению музея.
+    prompt = f"""
+    1. Контекст и цель:
+        - Вы являетесь виртуальным гидом для посетителей музея-заповедника Петергоф.
+        - Ваша цель — предоставлять исчерпывающие ответы на вопросы пользователей относительно объектов музея и маршрутов, 
+          основываясь на доступной базе данных. Поддерживайте интерес посетителя к посещению музея.
 
-2. Коммуникация с пользователем:
-    - Всегда стремитесь ответить до 1000 символов. Я запрещаю отвечать длиной больше 1000 символов.
-    - Если вопрос не может быть решён на основе данных, вежливо признайте, что не имеете ответа, но предложите общую информацию о музее.
+    2. Коммуникация с пользователем:
+        - Всегда стремитесь ответить до 1000 символов (это очень важно).
+        - Если вопрос не может быть решён на основе данных, вежливо признайте, что не имеете ответа, 
+          но предложите общую информацию о музее.
 
-3. Подача информации:
-    - При ответе на вопросы о конкретных объектах, предоставляйте название и завлекательное описание.
-    - Если вопрос касается маршрутов, укажите несколько рекомендованных объектов последовательно, формируя маршрут.
+    3. Подача информации:
+        - При ответе на вопросы о конкретных объектах, предоставляйте название и завлекательное описание.
+        - Если вопрос касается маршрутов, укажите несколько рекомендованных объектов последовательно, формируя маршрут.
 
-4. Мотивация и вдохновение:
-    - Используйте вдохновляющий и побуждающий язык, чтобы заинтересовать пользователя в посещении музея.
-    - Подчеркните уникальные аспекты и ценность каждого объекта, сделав акцент на незабываемом опыте, который ждёт посетителя.
-    - Иногда включайте предложения посетить сайт музея для более полной информации, но не прикладывайте ссылку.
+    4. Мотивация и вдохновение:
+        - Используйте вдохновляющий и побуждающий язык, чтобы заинтересовать посетителя.
+        - Подчёркивайте уникальные аспекты и ценность каждого объекта.
+        - Иногда включайте приглашение посетить сайт музея.
 
-5. Ограничения:
-    - Не используйте символы форматирования по типу \"**\" (звёздочки).
-    - Длина сообщения до 1000 символов.
-    - Отвечайте только на основе имеющейся информации. Если данных недостаточно, честно сообщите об этом, предлагая в качестве альтернативы общие советы по посещению музея.
+    5. Ограничения:
+        - Не используйте символы форматирования вроде "**" (звёздочки).
+        - Длина сообщения до 1000 символов.
+        - Отвечайте только на основе имеющейся информации. Если данных недостаточно, честно скажите об этом.
 
-6. Обязательно В КОНЦЕ ответа предоставьте параметр image_url (ссылку на изображение объекта, про который ты пишешь); несколько ссылок, если в вопросе ИЛИ вашем ответе упоминается несколько ОБЪЕКТОВ; одну ссылку, если упоминается один объект; не писать ничего, если не упоминается ни один объект.
-    ещё раз, если ты сам в ответе упомянул какие-то объекты, например фонтаны, то приложи ссылки
-    {random_route}
-    Соблюдайте эти рекомендации, чтобы предоставить пользователям интересные, информативные и мотивирующие ответы, вдохновляя их на посещение музея Петергоф.
-'''
-    memory_text = \
-f'''
-6. Память:
-    - Вот 3 последних запроса пользователя к вам и ваши ответы на них:
-        1 (последний): вопрос: {memory["questions"][0]}; ваш ответ: {memory["answers"][0]};
-        2 (предпоследний): вопрос: {memory["questions"][1]}; ваш ответ: {memory["answers"][1]};
-        3 (предпредпоследний): вопрос: {memory["questions"][2]}; ваш ответ: {memory["answers"][2]};
-    \"-\" означает отсутствие запроса. Пользователь может использовать местоимения или говорить в контексте этих сообщений, учитывайте это.
-'''
-    assistant = await bot.sdk.assistants.create(
-        name='rag-assistant',
-        model='yandexgpt',
-        tools=[tool],
-        temperature=0.1,
-        instruction=prompt,
-        max_prompt_tokens=2000
-    )
-    thread = await bot.sdk.threads.create()
-    try:
-        await thread.write(question)
-        run = await assistant.run(thread)
-        result = await run
-        bot.user_settings[str(user_id)]['memory']['questions'] = [question, memory['questions'][0], memory['questions'][1]]
-        bot.user_settings[str(user_id)]['memory']['answers'] = [result.text.split('image_url')[0].strip(), memory['answers'][0], memory['answers'][1]]
-        write_dictionary(bot.user_settings)
-        result_text = result.text.replace('**', '')
-        if bot.user_settings[str(user_id)]['language'] == 'en':
-            result_text = await ru_to_en(result_text)
-        return result_text
-    finally:
-        await search_index.delete()
-        await thread.delete()
-        await assistant.delete()
+    6. Память (последние 3 обмена):
+       1 (последний): вопрос: {memory["questions"][0]}; ваш ответ: {memory["answers"][0]};
+       2 (предпоследний): вопрос: {memory["questions"][1]}; ваш ответ: {memory["answers"][1]};
+       3 (предпредпоследний): вопрос: {memory["questions"][2]}; ваш ответ: {memory["answers"][2]};
+
+    ---
+    Фрагменты релевантного контекста (не обязательно использовать всё):
+    {relevant_context}
+
+    Теперь ответьте пользователю.
+        """.strip()
+
+    result = llm_model.run(prompt)
+    # Сам текст ответа: result.text
+    answer_text = result.alternatives[0].text
+    # 4. Обновляем "память"
+
+    bot.user_settings[str(user_id)]['memory']['questions'] = [
+        question,
+        memory['questions'][0],
+        memory['questions'][1]
+    ]
+    bot.user_settings[str(user_id)]['memory']['answers'] = [
+        answer_text,
+        memory['answers'][0],
+        memory['answers'][1]
+    ]
+    write_dictionary(bot.user_settings)
+    result_text = result.text.replace('**', '')
+    if bot.user_settings[str(user_id)]['language'] == 'en':
+        result_text = await ru_to_en(result_text)
+    return result_text
+
 
 
 def load_dictionary(path='users.json'):
@@ -568,9 +574,12 @@ async def main():
             api_key=getenv('AUTH')
         )
     )
-    bot.sdk = AsyncYCloudML(folder_id=getenv('FOLDER'), auth=getenv('AUTH'))
-    await files_delete()
-    bot.files = await files_create()
+    # Инициализируем Chroma и загружаем данные (при необходимости)
+    bot.chroma_collection = init_chroma()
+    # Если нужно, один раз на старте пересоздать или дозагрузить документы:
+    # bot.chroma_collection.delete()  # если хотите всё пересоздать
+    # create_or_update_chroma_collection(bot.chroma_collection)
+
     await dp.start_polling()
 
 
