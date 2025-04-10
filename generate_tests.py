@@ -19,48 +19,6 @@ RESULTS_DIR = "test_data"
 DATASETS_DIR = os.path.join(RESULTS_DIR, "datasets")
 
 
-async def get_chatgpt_response(messages: list,
-                               model: str = 'gpt-4o',
-                               temperature: float = 0.1,
-                               timeout: int = 600,
-                               max_tokens: int = 16000) -> str:
-    headers = {'Authorization': f'OAuth {SOY_TOKEN}'}
-
-    model_family = 'openai'
-    if 'deepseek' in model.lower():
-        model_family = 'together'
-        model = 'deepseek-ai/deepseek-r1'
-
-    if 'meta-llama' in model.lower():
-        model_family = 'together'
-
-    url = f'http://api.eliza.yandex.net/{model_family}/v1/chat/completions'
-
-    data = {
-        'model': model,
-        'temperature': temperature,
-        'messages': messages,
-        'max_tokens': max_tokens
-    }
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json=data, headers=headers, timeout=timeout) as response:
-                result = await response.json()
-                if response.status == 200:
-                    answer = result['response']['choices'][0]['message']['content']
-                    return answer
-                else:
-                    error_msg = result.get('response', {}).get('error', {}).get('message', 'Unknown error')
-                    print(f"API Error: {error_msg}")
-                    return ''
-        except asyncio.exceptions.TimeoutError:
-            warnings.warn('Timeout Exceeded. Return empty value')
-            return ''
-        except Exception as e:
-            print(f'Error in API call: {e}')
-            raise e
-
-
 def ensure_directories():
     os.makedirs(RESULTS_DIR, exist_ok=True)
     os.makedirs(DATASETS_DIR, exist_ok=True)
