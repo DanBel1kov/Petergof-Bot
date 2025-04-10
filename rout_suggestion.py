@@ -29,6 +29,15 @@ def parse_json_output(text):
 
     return text.strip()
 
+def format_dialog(dialog):
+    formatted_lines = []
+    for message in dialog:
+        if 'user' in message:
+            formatted_lines.append("User: " + message['user'].strip())
+        elif 'bot' in message:
+            formatted_lines.append("Bot: " + message['bot'].strip())
+    return "\n".join(formatted_lines)
+
 
 def update_route(user_message, route_json, relevant_objects, model):
     objects_names = ", ".join([obj["name"] for obj in route_json])
@@ -136,50 +145,70 @@ def lemmatize_text(text):
 
 
 def suggest_route_by_gpt(model, route_description, link, dialog, last_message=None):
+    dialogue_str = format_dialog(dialog)
     prompt = f"""
-Ты – отзывчивый и внимательный помощник музея Петергоф, который стремится сделать визит пользователя максимально интересным и удобным. Ранее ты вел диалог с пользователем, чтобы выяснить его пожелания:
-{dialog}
+Вы ведёте живой и дружелюбный диалог с пользователем. Ты – отзывчивый и внимательный помощник музея Петергоф, который стремится сделать визит максимально интересным и удобным для пользователя. Ранее ты вел диалог с пользователем для выяснения его пожеланий:
+{dialogue_str}
 
-Исходя из этого диалога, ты подобрал следующий оптимальный маршрут:
+Исходя из этого диалога, ты подобрали следующий оптимальный маршрут:
 {route_description}
 
-Теперь кратко расскажи почему ты выбрал следующие маршруты и потом выведи их списком, дав о них краткую информацию.
- Затем спроси, устраивает ли его этот вариант маршрута или нужны ещё корректировки. В конце сообщи, что маршрут можно изучить подробнее по ссылке:
-{link}
+Теперь кратко прокомментируй диалог и какой маршрут ты подобрал, а затем выведи его в виде булет списка.
+Если в последнем сообщении пользователь, например, просит добавить объект, которого нет в списке (например, **Макдональдс**), объясните, что такой объект отсутствует на территории Петергофа и предложи альтернативное решение. Если запрос пользователя кажется не по теме или непонятным, сообщи, что ты не до конца понял запрос, и предложи возможный вариант маршрута с объяснением.
+Общайся живо и поддерживающе, обязательно обращаясь к пользователю на «Вы» и не начиная сообщение с приветствия, если только пользователь не поздоровался.
 
+Используй Markdown для Telegram следующим образом:
+- Названия объектов оборачивайте в **двойные звёздочки**, чтобы выделять их жирным.
+- Каждое описание объекта выводите с новой строки, чтобы текст не слипался: **Название объекта** – краткое описание.
+
+Затем спроси, устраивает ли пользователя предложенный вариант маршрута, или требуется корректировка.
+В конце сообщи, что подробности маршрута можно узнать по ссылке:
+{link}
 """
     if last_message is not None:
-        prompt += f"Ранее ты уже предлагал маршрут но пользователь решил его поменять. Вот его по: {last_message}"
+        prompt += f" Ранее Вы уже предлагали маршрут, но пользователь решил его изменить. Вот его вариант: {last_message}"
     result = model.run(prompt)
     return result.alternatives[0].text
 
 
+
 def change_route_by_gpt(model, route_description, link, last_message, user_dialog):
+    dialogue_str = format_dialog(user_dialog)
     prompt = f"""
-Ты – дружелюбный и отзывчивый помощник музея Петергоф, который всегда старается сделать маршрут максимально удобным и интересным для пользователя. Ранее ты уже предлагал маршрут, но после уточнения пожеланий пользователя ты внёс коррективы для его улучшения.
+Ты ведёшь живой и дружелюбный диалог с пользователем. Ты – отзывчивый помощник музея Петергоф, который всегда старается сделать маршрут максимально удобным и интересным для пользователя. Ранее ты уже предлагал маршрут, но пользователь решил сменить или уточнить маршрут.
 
 Вот история диалога с пользователем:
-{user_dialog}
+{dialogue_str}
 
 Последнее сообщение пользователя: {last_message}
 
 Новый маршрут, который ты подобрал:
 {route_description}
 
-Расскажи пользователю подробно, что именно ты изменил в маршруте, чтобы он лучше соответствовал его последним пожеланиям. 
-Выведи новые объекты в формате булет списка при этом дав краткую информацию о них. 
-Также сообщи, что маршрут можно изучить по ссылке:
+ВНИМАНИЕ: Внимательно проанализируй предыдущий твой последний ответ, в котором ты рассказываешь про маршрут, новый маршрут и диалог с пользователем. Если новые предложения идентичны тем, что были предложены ранее, не повторяй их заново и не говори, что ты их добавил. Вместо этого сообщи, что маршрут не изменился, и попроси у пользователя дополнительные уточнения или пожелания.
+
+Расскажи пользователю подробно, какие изменения ты внес относительно твоей прошлой рекомендации в маршрут (если изменения были произведены), чтобы он лучше соответствовал его последним пожеланиям. Общайся живо и разговорно, обращаясь к пользователю на «Вы». 
+
+Если в последнем сообщении пользователь просит добавить объект, которого нет на территории (например, **Макдональдс**), сообщи, что такой объект не располагается на территории Петергофа и поэтому не может быть включён в маршрут, но предложи альтернативное решение. Если запрос пользователя кажется странным или не по теме, предупреди, что ты не до конца понял запрос, и предложи возможный вариант маршрута с объяснением.
+
+Не начинай сообщение с приветствия, если только пользователь сам не поздоровался.
+
+Используй в ответе Markdown для Telegram следующим образом:
+- Названия объектов оборачивай в **двойные звёздочки**, чтобы выделять их жирным.
+- Каждое описание объекта выводи с новой строки, чтобы текст не слипался:
+  **Название объекта** – краткое описание.
+
+Также сообщи, что маршрут можно изучить подробнее по ссылке:
 {link}
 
-В конце спроси, устраивает ли его новый вариант маршрута или нужны еще изменения.
 """
-
+    print(prompt)
     result = model.run(prompt)
-    return result.alternatives[0].text
-
+    response_text = result.alternatives[0].text
+    return response_text
 
 def check_on_positivity(model, user_dialogues, mentioned_objects):
-    dialogue_str = "\n".join([d.get("user", d.get("bot", "")) for d in user_dialogues])
+    dialogue_str = format_dialog(user_dialogues)
     objects_str = ", ".join(mentioned_objects)
 
     prompt = f"""Ты умный гид музея Петергоф. В последнем сообщении пользователь захотел чтобы ты составил ему маршрут
@@ -334,7 +363,7 @@ def get_route_suggestion(user_dialogues, data_chunks, initial_coordinates=["59.8
         print("Creating a new collection")
         create_or_update_chroma_collection(chroma_collection)
 
-    all_objects_description = " ".join([junk['name'] + ' ' + junk['description'][:50] for junk in data_chunks])
+    all_objects_description = " ".join([junk['name'] + ' ' + junk['description'][:100] for junk in data_chunks])
     rephrazed_mes = rephrase(model, user_message, user_dialog, all_objects_description)
     # print(rephrazed_mes)
     additional_candidates = ''
@@ -345,7 +374,7 @@ def get_route_suggestion(user_dialogues, data_chunks, initial_coordinates=["59.8
         )
         retrieved_docs = retriever_results.get('documents', [[]])[0]
         # Обрезаем каждый документ до 100 символов, чтобы уменьшить объём контекста
-        retrieved_docs = [doc[:100] for doc in retrieved_docs]
+        retrieved_docs = [doc[:400] for doc in retrieved_docs]
         additional_candidates = "\n\n".join(retrieved_docs)
 
     current_old_names = [obj["name"] for obj in candidate_route]
@@ -398,6 +427,7 @@ def get_route_suggestion(user_dialogues, data_chunks, initial_coordinates=["59.8
 
 
 def select_new_routes_by_gpt(model, retrieved_context, current_old_names, user_message, user_dialog, all_old_names=[]):
+    user_dialog = format_dialog(user_dialog)
     prompt = f"""
 ## Основная инструкция:
 
@@ -538,7 +568,7 @@ def change_route_by_message(message, current_route_json, data_chunks, user_dialo
         auth=YANDEX_AUTH,
     )
     model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
-    model = model.configure(temperature=0.1)
+    model = model.configure(temperature=0.2)
 
     chroma_collection = init_chroma()
     collection_count = chroma_collection.count()
@@ -546,7 +576,7 @@ def change_route_by_message(message, current_route_json, data_chunks, user_dialo
         print("Creating a new collection")
         create_or_update_chroma_collection(chroma_collection)
 
-    all_objects_description = " ".join([junk['name'] + ' ' + junk['description'][:50] for junk in data_chunks])
+    all_objects_description = " ".join([junk['name'] + ' ' + junk['description'][:100] for junk in data_chunks])
     rephrazed_mes = rephrase(model, message, user_dialog, all_objects_description)
     retriever_results = chroma_collection.query(
         query_texts=[rephrazed_mes],
@@ -554,7 +584,7 @@ def change_route_by_message(message, current_route_json, data_chunks, user_dialo
     )
     retrieved_docs = retriever_results.get('documents', [[]])[0]
     # Обрезаем каждый документ до 400 символов, чтобы уменьшить объём контекста
-    retrieved_docs = [doc[:100] for doc in retrieved_docs]
+    retrieved_docs = [doc[:400] for doc in retrieved_docs]
     retrieved_context = "\n\n".join(retrieved_docs)
 
     # print('Current obj----------------')
@@ -607,7 +637,7 @@ def change_route_by_message(message, current_route_json, data_chunks, user_dialo
 
     route_description = ""
     for index, obj in enumerate(final_route):
-        route_description += f"{index + 1}. {obj['name']} - {obj['description'][:150]}...\n"
+        route_description += f"{index + 1}. {obj['name']} - {obj['description'][:500]}...\n"
     coordinates_list = [[obj["coordinates"]["lat"], obj["coordinates"]["lon"]] for obj in final_route]
     link = generate_yandex_maps_route_url(coordinates_list, initial_coordinates)
     route_description = change_route_by_gpt(model, route_description, link, message, user_dialog)

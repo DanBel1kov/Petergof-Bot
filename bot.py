@@ -67,7 +67,7 @@ async def get_answer_prompt(question, history, sdk, prompt_original=True, greeti
     print(f'image_question {image_question}')
     results = bot.chroma_collection.query(
         query_texts=[image_question],
-        n_results=5
+        n_results=10
     )
     print(history)
     retrieved_docs = results.get('documents', [[]])[0]
