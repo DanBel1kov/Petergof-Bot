@@ -64,12 +64,11 @@ async def get_image_question(question: str, history: str) -> str:
 
 async def get_answer_prompt(question, history, sdk, prompt_original=True, greeting_style="friendly"):
     image_question = await get_image_question(question, history)
-    print(f'image_question {image_question}')
+    print(f'image_question |{image_question}|; история |{history}|')
     results = bot.chroma_collection.query(
         query_texts=[image_question],
-        n_results=10
+        n_results=3
     )
-    print(history)
     retrieved_docs = results.get('documents', [[]])[0]
     relevant_context = "\n\n".join(retrieved_docs)
     links = get_links(relevant_context)
@@ -117,9 +116,15 @@ async def get_answer_prompt(question, history, sdk, prompt_original=True, greeti
         - Если вопрос о конкретном объекте, фокусируйся только на нем
     """
 
-    random_route = '' if random.randint(1, 10) != 1 else '''
-    В конце ответа можно предложить пользователю составить индивидуальный маршрут командой /route
-    '''
+    random_route = ''
+    if random.randint(1, 10) == 1:
+         random_route = '''
+                        В конце ответа можно предложить пользователю составить индивидуальный маршрут командой /route
+                        '''
+    elif random.randint(1, 3) == 1:
+        random_route = '''
+                       В конце ответа можно предложить пользователю составить индивидуальный маршрут командой /route, но только если вопрос пользователя связан с какими-то объектами!
+                       '''
 
     if prompt_original:
         prompt = f'''
@@ -157,7 +162,6 @@ async def shorten_links(links: list, question: str, answer: str):
     sdk = YCloudML(folder_id=getenv('FOLDER'), auth=getenv('AUTH'))
     llm_model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
     result = llm_model.run(f'Тебе подаётся вопрос пользователя и ответ бота по теме музея. Оцени количество упоминаемых объекто на открытом воздухе (примеры объектов: дворцы, парки, фонтаны, музеи) и напиши только число. Вопрос: {question}; ответ: {answer}')
-    print(result.alternatives[0].text)
     try:
         length = int(result.alternatives[0].text)
     except Exception as e:
@@ -315,7 +319,6 @@ async def get_route(user_id: int, request: str = None, latitude: str = None, lon
         res_final = res_final.replace('LinkYandexMaps', 'LinkYandexMaps')'''
         res_final = res_translated.replace(' ~ ', '~').replace(' & ', '&').replace(' = ', '=').replace('] ', ']')
     res_final = escape_text_except_links(res_final).replace(r'%2С', r'%2C')
-    print(res_final)
     return res_final
 
 
@@ -410,7 +413,6 @@ async def tickets_to_data():
             data_tickets['data'].insert(0,
                                         f"Расписание \"{data['places'][i]['title']}\" на сегодняшнее число: {schedule}")
         except Exception as e:
-            print(data['places'][i]['title'])
             await print_exception(e)
     write_dictionary(data_tickets, 'tickets.json')
 
@@ -752,7 +754,6 @@ async def on_message(message: types.Message):
 
     try:
         answer_shorten = shorten_text(answer)
-        print(links)
         if len(links) == 1:
             try:
                 await message.reply_photo(photo=links[0], caption=answer_shorten, reply_markup=reply_markup)
