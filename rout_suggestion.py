@@ -30,11 +30,12 @@ def parse_json_output(text):
     return text.strip()
 
 def format_dialog(dialog):
+    print(f'format_dialog |{dialog}|')
     formatted_lines = []
     for message in dialog:
         if 'user' in message:
             formatted_lines.append("User: " + message['user'].strip())
-        elif 'bot' in message:
+        if 'bot' in message:
             formatted_lines.append("Bot: " + message['bot'].strip())
     return "\n".join(formatted_lines)
 
