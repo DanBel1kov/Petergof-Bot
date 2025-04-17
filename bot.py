@@ -38,6 +38,14 @@ bot.user_settings = {}
 bot.texts = {}
 bot.states = {}
 bot.route_data = {}
+bot.context_buttons = {
+    0: "Расскажи про новости",
+    1: "Расскажи про билеты",
+    2: "Расскажи про парки",
+    3: "Расскажи про музеи",
+    4: "Расскажи про дворцы",
+    5: "Расскажи про фонтаны"
+}
 bot.sdk = None
 bot.files = None
 CIS_COUNTRIES = ['ru', 'ua', 'by', 'kz', 'kg', 'am', 'uz', 'tj', 'az', 'md']
@@ -274,6 +282,12 @@ async def help_command(message: types.Message):
     await message.reply(translation(message.from_user.id, 'help'))
 
 
+@dp.edited_message_handler(lambda message: message.chat.type == 'private', commands=['messages'])
+@dp.message_handler(lambda message: message.chat.type == 'private', commands=['messages'])
+async def messages_command(message: types.Message):
+    await message.reply(translation(message.from_user.id, 'messages'), reply_markup=await get_messages_keyboard(message.from_user.id))
+
+
 def escape_text_except_links(text):
     links = re.findall(r'\[([^\]]+)\]\((https?:\/\/[^\)]+)\)', text)
     placeholder = "LINK_PLACEHOLDER_{}"
@@ -326,8 +340,9 @@ async def get_route(user_id: int, request: str = None, latitude: str = None, lon
 @dp.message_handler(lambda message: message.chat.type == 'private', commands=['route'])
 async def route(message: types.Message):
     msg = await message.reply(get_route_text(message.from_user.id), disable_web_page_preview=True)
-    await msg.edit_text(await get_route(message.from_user.id), parse_mode='MarkdownV2')
-    await msg.edit_reply_markup(get_route_keyboard(message.from_user.id))
+    route_result = await get_route(message.from_user.id)
+    await msg.edit_text(route_result, parse_mode='MarkdownV2')
+    await msg.edit_reply_markup(await get_route_keyboard(message.from_user.id, route_result))
 
 
 async def news_task():
@@ -461,7 +476,7 @@ def get_ticket_answer_keyboard(user_id, ticket_id):
 
 
 def get_reply_keyboard():
-    return ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True, keyboard=[[KeyboardButton('/help'), KeyboardButton('/settings'), KeyboardButton('/support'), KeyboardButton('/route')]])
+    return ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True, keyboard=[[KeyboardButton('/help'), KeyboardButton('/messages'), KeyboardButton('/settings'), KeyboardButton('/support'), KeyboardButton('/route')]])
 
 
 def get_settings_keyboard(user_id: int):
@@ -470,12 +485,57 @@ def get_settings_keyboard(user_id: int):
     return InlineKeyboardMarkup().add(button1).add(button2)
 
 
-def get_route_keyboard(user_id: int):
+async def get_route_keyboard(user_id: int, message: str):
     keyboard = InlineKeyboardMarkup()
     keyboard.row(InlineKeyboardButton(translation(user_id, 'route_keyboard_1'), callback_data=f'route_yes'))
     keyboard.row(InlineKeyboardButton(translation(user_id, 'route_keyboard_2'), callback_data=f'route_no'))
     keyboard.row(InlineKeyboardButton(translation(user_id, 'route_keyboard_3'), callback_data=f'route_geo'))
+    buttons = await get_context_buttons(user_id, message)
+    if len(buttons) == 0:
+        return keyboard
+    for i in buttons:
+        keyboard.row(i)
     return keyboard
+
+
+async def get_context_keyboard(user_id: int, message: str):
+    keyboard = InlineKeyboardMarkup()
+    buttons = await get_context_buttons(user_id, message)
+    if len(buttons) == 0:
+        return None
+    for i in buttons:
+        keyboard.row(i)
+    return keyboard
+
+
+async def get_messages_keyboard(user_id: int):
+    keyboard = InlineKeyboardMarkup()
+    for i in [j for j in bot.context_buttons.keys() if j < 100]:
+        if bot.user_settings[str(user_id)]['language'] == 'en':
+            bot.context_buttons[i] = await ru_to_en(bot.context_buttons[i])
+        keyboard.row(InlineKeyboardButton(bot.context_buttons[i], callback_data=f'context_{i}'))
+    return keyboard
+
+
+async def get_context_buttons(user_id: int, message: str):
+    try:
+        sdk = YCloudML(folder_id=getenv('FOLDER'), auth=getenv('AUTH'))
+        llm_model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
+        result = llm_model.run(f'Тебе подаётся на вход сообщение Telegram чат-бота по Петергофу его пользователю. Тебе нужно составить 2 коротких контекстных сообщения для inline-кнопок, эти кнопки будут прикреплены к сообщению, и пользователь сможет их использовать для продолжения диалога. Если message является маршрутом, как кнопки отправь ТОЛЬКО вопросы об объектах из этого маршрута. Раздели сообщение переносом строки. Пример: кнопка1\nкнопка2 Сообщение: {message}')
+        buttons_text = [i.strip() for i in result.alternatives[0].text.split('\n')]
+        buttons_text = [i for i in buttons_text if i]
+        print(buttons_text)
+        buttons = []
+        for i in range(len(buttons_text)):
+            if bot.user_settings[str(user_id)]['language'] == 'en':
+                buttons_text[i] = await ru_to_en(buttons_text[i])
+            rndm = random.randint(100000000, 999999999)
+            bot.context_buttons[rndm] = buttons_text[i]
+            buttons.append(InlineKeyboardButton(buttons_text[i], callback_data=f'context_{rndm}'))
+        return buttons
+    except Exception as e:
+        await print_exception(e)
+        return []
 
 
 @dp.message_handler(state=GeoForm.name, content_types=['location'])
@@ -486,8 +546,9 @@ async def handle_location(message: types.Message, state: FSMContext):
         bot.route_data[message.from_user.id] = {'geo': [latitude, longitude], 'request': None, 'json': None}
     else:
         bot.route_data[message.from_user.id]['geo'] = [latitude, longitude]
-    await msg.edit_text(await get_route(message.from_user.id, bot.route_data[message.from_user.id]['request'], bot.route_data[message.from_user.id]['geo'][0], bot.route_data[message.from_user.id]['geo'][1]), parse_mode='MarkdownV2')
-    await msg.edit_reply_markup(get_route_keyboard(message.from_user.id))
+    route_result = await get_route(message.from_user.id, bot.route_data[message.from_user.id]['request'], bot.route_data[message.from_user.id]['geo'][0], bot.route_data[message.from_user.id]['geo'][1])
+    await msg.edit_text(route_result, parse_mode='MarkdownV2')
+    await msg.edit_reply_markup(await get_route_keyboard(message.from_user.id, route_result))
     await state.finish()
 
 
@@ -647,6 +708,15 @@ async def route_inline_handler(call: types.CallbackQuery):
         await call.message.edit_reply_markup()
 
 
+@dp.callback_query_handler(lambda call: 'context_' in call.data)
+async def route_inline_handler(call: types.CallbackQuery):
+    rndm = int(call.data.split('context_')[1])
+    message = call.message
+    message.from_user.id = call.from_user.id
+    message.text = bot.context_buttons[rndm]
+    await on_message(message)
+
+
 def get_route_text(user_id):
     return translation(user_id, 'creating_route_default') if bot.route_data.get(user_id) is None or bot.route_data[user_id]['geo'][0] is None else translation(user_id, 'creating_route_geo')
 
@@ -659,8 +729,9 @@ async def route_finish(message: types.Message, state: FSMContext):
         bot.route_data[message.from_user.id] = {'geo': [None, None], 'request': message.text, 'json': None}
     else:
         bot.route_data[message.from_user.id]['request'] = message.text
-    await msg.edit_text(await get_route(message.from_user.id, bot.route_data[message.from_user.id]['request'], bot.route_data[message.from_user.id]['geo'][0], bot.route_data[message.from_user.id]['geo'][1]), parse_mode='MarkdownV2')
-    await msg.edit_reply_markup(get_route_keyboard(message.from_user.id))
+    route_result = await get_route(message.from_user.id, bot.route_data[message.from_user.id]['request'], bot.route_data[message.from_user.id]['geo'][0], bot.route_data[message.from_user.id]['geo'][1])
+    await msg.edit_text(route_result, parse_mode='MarkdownV2')
+    await msg.edit_reply_markup(await get_route_keyboard(message.from_user.id, route_result))
 
 
 def text_v2(text):
@@ -716,37 +787,32 @@ async def print_exception(e: Exception):
 @dp.message_handler(lambda message: message.chat.type == 'private')
 async def on_message(message: types.Message):
     msg = await message.reply(translation(message.from_user.id, 'loading'))
+    answer, links, question_type = await get_answer(message.text, message.from_user.id)
+
+    dialog_history = "\n".join([f"user: {q}" if q != '-' else "" for q in
+                                bot.user_settings[str(message.from_user.id)]['memory']['questions']])
+    is_route = False
     try:
-        answer, links, question_type = await get_answer(message.text, message.from_user.id)
-
-        dialog_history = "\n".join([f"user: {q}" if q != '-' else "" for q in
-                                    bot.user_settings[str(message.from_user.id)]['memory']['questions']])
-        is_route = False
-        try:
-            question_type = question_type if question_type != "" else classify_question_type(message.text, dialog_history)
-            is_route = (question_type == "route")
-        except Exception as e:
-            print(f"Ошибка классификации: {e}")
-        markdown = is_route or ('](http' in answer)
-        if markdown:
-            answer = escape_text_except_links(answer).replace(r'%2С', r'%2C')
-
-        reply_markup = None
-        if is_route:
-            reply_markup = get_route_keyboard(message.from_user.id)
-        else:
-            answer_split = answer.split('Оценка объекта')
-            answer = answer_split[0].strip()
-            if len(answer_split) > 1 and '/route' in answer_split[1]:
-                answer += '\n' * 2 + [i for i in answer_split[1].split('\n') if '/route' in i][0]
+        question_type = question_type if question_type != "" else classify_question_type(message.text, dialog_history)
+        is_route = (question_type == "route")
     except Exception as e:
-        await print_exception(e)
-        await msg.edit_text(translation(message.from_user.id, 'unexpected_error'))
-        return
+        print(f"Ошибка классификации: {e}")
+    markdown = is_route or ('](http' in answer)
+    if markdown:
+        answer = escape_text_except_links(answer).replace(r'%2С', r'%2C')
+
+    if is_route:
+        reply_markup = await get_route_keyboard(message.from_user.id, answer)
+    else:
+        reply_markup = await get_context_keyboard(message.from_user.id, answer)
+        answer_split = answer.split('Оценка объекта')
+        answer = answer_split[0].strip()
+        if len(answer_split) > 1 and '/route' in answer_split[1]:
+            answer += '\n' * 2 + [i for i in answer_split[1].split('\n') if '/route' in i][0]
 
     if len(links) == 0:
         try:
-            await msg.edit_text(shorten_text(answer, 4080), reply_markup=reply_markup if is_route else None, parse_mode='MarkdownV2' if markdown else None)
+            await msg.edit_text(shorten_text(answer, 4080), reply_markup=reply_markup, parse_mode='MarkdownV2' if markdown else None)
         except Exception as e:
             print(f"Ошибка при отправке сообщения: {e}")
             await msg.edit_text(shorten_text(answer.replace('\\', ''), 4080))
@@ -759,7 +825,7 @@ async def on_message(message: types.Message):
                 await message.reply_photo(photo=links[0], caption=answer_shorten, reply_markup=reply_markup)
             except Exception as e:
                 print(f"Ошибка при отправке фото: {e}")
-                await message.reply_photo(photo=links[0], caption=answer_shorten.replace('\\', ''))
+                await message.reply_photo(photo=links[0], caption=answer_shorten.replace('\\', ''), reply_markup=reply_markup)
         elif len(links) > 1:
             media_group = MediaGroup()
             for i, link in enumerate(links):
