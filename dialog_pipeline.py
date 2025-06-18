@@ -186,3 +186,104 @@ def answer_from_news(question: str, dialog_history: str, greeting_style="friendl
     model = model.configure(temperature=0.4)
     result = model.run(prompt)
     return result.alternatives[0].text.strip()
+
+
+def classify_sources(question: str, dialog_history: str) -> dict:
+    """Multi-label classification of information sources."""
+    sdk = YCloudML(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_AUTH)
+    model = sdk.models.completions(model_name="yandexgpt")
+    model = model.configure(temperature=0.1)
+    prompt = f"""
+Определи, какие источники необходимо использовать для ответа на вопрос о Петергофе.
+Источники:
+1. objects - информация об объектах музея
+2. base - общая информация о Петергофе
+3. events - сведения о мероприятиях
+
+Верни JSON {{"objects": true/false, "base": true/false, "events": true/false}}.
+
+Вопрос: "{question}"
+История: {dialog_history}
+"""
+    result = model.run(prompt)
+    text = result.alternatives[0].text.strip()
+    try:
+        data = json.loads(text)
+        return {
+            "objects": bool(data.get("objects")),
+            "base": bool(data.get("base")),
+            "events": bool(data.get("events")),
+        }
+    except Exception:
+        text = text.lower()
+        return {
+            "objects": "objects" in text,
+            "base": "base" in text,
+            "events": "events" in text,
+        }
+
+
+def build_search_query(question: str, dialog_history: str) -> str:
+    """Generate short search query from dialog."""
+    sdk = YCloudML(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_AUTH)
+    model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
+    model = model.configure(temperature=0.2)
+    prompt = f"""
+Сформулируй короткий поисковый запрос на основе истории диалога и вопроса.
+Вопрос: "{question}"
+История: {dialog_history}
+Верни одну строку без пояснений.
+"""
+    result = model.run(prompt)
+    return result.alternatives[0].text.strip()
+
+
+def retrieve_documents(query: str, use_objects: bool, use_base: bool, use_events: bool) -> list:
+    """Retrieve documents from selected RAG sources."""
+    docs = []
+    if use_objects:
+        collection = init_chroma()
+        if collection.count() == 0:
+            create_or_update_chroma_collection(collection)
+        res = collection.query(query_texts=[query], n_results=10)
+        docs.extend(res.get("documents", [[]])[0])
+    if use_base:
+        try:
+            with open("tickets.json", "r", encoding="utf-8") as f:
+                docs.extend(json.load(f).get("data", [])[:10])
+        except Exception:
+            pass
+    if use_events:
+        try:
+            with open("news.json", "r", encoding="utf-8") as f:
+                docs.extend(json.load(f).get("news", [])[:10])
+        except Exception:
+            pass
+    return docs
+
+
+def get_latest_news() -> str:
+    try:
+        with open("news.json", "r", encoding="utf-8") as f:
+            news = json.load(f).get("news", [])
+        return "\n".join(news[:3])
+    except Exception:
+        return ""
+
+
+def generate_final_answer(question: str, dialog_history: str) -> tuple:
+    """End-to-end pipeline using classification and RAG."""
+    labels = classify_sources(question, dialog_history)
+    query = build_search_query(question, dialog_history)
+    docs = retrieve_documents(query, labels["objects"], labels["base"], labels["events"])
+    context = "\n\n".join(docs)
+    links = get_links(context)
+    news_block = get_latest_news()
+    prompt = f"""
+Новости:\n{news_block}\n\nКонтекст:\n{context}\n\nВопрос пользователя: "{question}"\nИстория: {dialog_history}
+"""
+    sdk = YCloudML(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_AUTH)
+    model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
+    model = model.configure(temperature=0.4)
+    result = model.run(prompt)
+    return result.alternatives[0].text.strip(), links
