@@ -27,7 +27,14 @@ from yandex_cloud_ml_sdk import YCloudML
 import requests
 from bs4 import BeautifulSoup
 from datetime import date
-from dialog_pipeline import answer_from_news, is_museum_question, is_greeting_in_message, classify_question_type
+from dialog_pipeline import (
+    answer_from_news,
+    is_greeting_in_message,
+    classify_sources,
+    build_search_query,
+    retrieve_documents,
+    generate_final_answer,
+)
 import requests
 from PyPDF2 import PdfReader
 
@@ -181,7 +188,6 @@ async def shorten_links(links: list, question: str, answer: str):
 
 async def get_answer(question: str, user_id: int) -> tuple:
     sdk = YCloudML(folder_id=getenv('FOLDER'), auth=getenv('AUTH'))
-    question_type = ""
 
     memory = bot.user_settings[str(user_id)]['memory']
 
@@ -213,30 +219,7 @@ async def get_answer(question: str, user_id: int) -> tuple:
 
     links = []
     try:
-        question_type = classify_question_type(question, dialog_history)
-
-        if question_type == "museum":
-            answer_text, links = await get_answer_prompt(question, dialog_history_2, sdk, True, greeting_style=greeting_style)
-            links = await shorten_links(links, question, answer_text)
-        elif question_type == "route":
-            from utils import create_json_chunks
-            data_chunks = create_json_chunks()
-            coordinates = ['59.891802', '29.913220']
-
-            if bot.route_data.get(user_id) is not None and bot.route_data[user_id]['geo'][0] is not None:
-                coordinates = bot.route_data[user_id]['geo']
-
-            answer_text, current_route_json = get_route_suggestion(user_dialogues, data_chunks, initial_coordinates=coordinates)
-
-            if bot.route_data.get(user_id) is None:
-                bot.route_data[user_id] = {'geo': coordinates, 'request': question, 'json': current_route_json}
-            else:
-                bot.route_data[user_id]['request'] = question
-                bot.route_data[user_id]['json'] = current_route_json
-
-            answer_text = answer_text.replace('*', '')
-        else:
-            answer_text = answer_from_news(question, dialog_history, greeting_style=greeting_style)
+        answer_text, links = generate_final_answer(question, dialog_history)
     except Exception as e:
         answer_text, links = await get_answer_prompt(question, dialog_history_2, sdk, False, greeting_style=greeting_style)
         links = await shorten_links(links, question, answer_text)
@@ -258,7 +241,7 @@ async def get_answer(question: str, user_id: int) -> tuple:
     if bot.user_settings[str(user_id)]['language'] == 'en':
         result_text = await ru_to_en(result_text)
 
-    return result_text, links, question_type
+    return result_text, links
 
 
 async def is_news_useful(question: str) -> str:
@@ -787,28 +770,17 @@ async def print_exception(e: Exception):
 @dp.message_handler(lambda message: message.chat.type == 'private')
 async def on_message(message: types.Message):
     msg = await message.reply(translation(message.from_user.id, 'loading'))
-    answer, links, question_type = await get_answer(message.text, message.from_user.id)
+    answer, links = await get_answer(message.text, message.from_user.id)
 
     dialog_history = "\n".join([f"user: {q}" if q != '-' else "" for q in
                                 bot.user_settings[str(message.from_user.id)]['memory']['questions']])
-    is_route = False
-    try:
-        question_type = question_type if question_type != "" else classify_question_type(message.text, dialog_history)
-        is_route = (question_type == "route")
-    except Exception as e:
-        print(f"Ошибка классификации: {e}")
-    markdown = is_route or ('](http' in answer)
+    markdown = '](http' in answer
     if markdown:
         answer = escape_text_except_links(answer).replace(r'%2С', r'%2C')
 
-    if is_route:
-        reply_markup = await get_route_keyboard(message.from_user.id, answer)
-    else:
-        reply_markup = await get_context_keyboard(message.from_user.id, answer)
-        answer_split = answer.split('Оценка объекта')
-        answer = answer_split[0].strip()
-        if len(answer_split) > 1 and '/route' in answer_split[1]:
-            answer += '\n' * 2 + [i for i in answer_split[1].split('\n') if '/route' in i][0]
+    reply_markup = await get_context_keyboard(message.from_user.id, answer)
+    answer_split = answer.split('Оценка объекта')
+    answer = answer_split[0].strip()
 
     if len(links) == 0:
         try:
@@ -834,8 +806,6 @@ async def on_message(message: types.Message):
                 else:
                     media_group.attach_photo(photo=link)
             await message.reply_media_group(media=media_group)
-            if is_route:
-                await message.reply("Выберите действие с маршрутом:", reply_markup=reply_markup)
         await msg.delete()
         return
     except Exception as e:
@@ -843,7 +813,7 @@ async def on_message(message: types.Message):
         await print_exception(e)
 
     try:
-        await msg.edit_text(shorten_text(answer, 4080) if is_route else shorten_text(answer.replace('\\', ''), 4080), reply_markup=reply_markup if is_route else None, parse_mode='MarkdownV2' if markdown else None)
+        await msg.edit_text(shorten_text(answer.replace('\\', ''), 4080), reply_markup=reply_markup, parse_mode='MarkdownV2' if markdown else None)
     except Exception as e:
         print(f"Критическая ошибка в обработке сообщения: {e}")
         await msg.edit_text(translation(message.from_user.id, 'unexpected_error'))
@@ -859,7 +829,8 @@ async def handle_voice_message(message: types.Message):
     text = recognize(local_file)
     text = text if text is not None and text != '' and len(text) >= 2 else '-'
     remove(local_file)
-    await msg.edit_text(f'Ваш вопрос: {quote_text(text)}\n\n{(await get_answer(text, message.from_user.id))[0].strip()}', parse_mode='HTML')
+    answer, _ = await get_answer(text, message.from_user.id)
+    await msg.edit_text(f'Ваш вопрос: {quote_text(text)}\n\n{answer.strip()}', parse_mode='HTML')
 
 
 @dp.message_handler(content_types=[types.ContentType.ANY])
