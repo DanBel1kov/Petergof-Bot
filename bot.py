@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 from traceback import format_exception
+
+import feedparser
 import pytz
 from aiogram import types
 from aiogram import Bot, Dispatcher
@@ -59,6 +61,8 @@ CIS_COUNTRIES = ['ru', 'ua', 'by', 'kz', 'kg', 'am', 'uz', 'tj', 'az', 'md']
 admin_chat = -1002411793280
 COLLECTION_NAME = "peterhof_docs"
 bot.chroma_collection = None
+bot.chroma_collection_news = None
+bot.chroma_collection_base = None
 
 
 def translation(user_id, key):
@@ -337,6 +341,64 @@ async def news_task():
         sleep_time = (target_time - now).total_seconds()
         await asyncio.sleep(sleep_time)
         await add_news()
+        await context_v2()
+        await base_links()
+
+
+async def context_v2():
+    data = load_dictionary('data.json')
+    for i in range(len(data['places'])):
+        url = data['places'][i]['ticket_url'].replace('/info#date=', '')
+        data['places'][i]['context_v2'] = data['places'][i]['context']
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            article_container = soup.find('article', class_='article')
+            if article_container:
+                paragraphs = article_container.find_all('p')
+                result_text = '\n\n'.join(p.get_text(strip=True) for p in paragraphs)
+                data['places'][i]['context_v2'] = (result_text if ('Комментирует' not in result_text and 'Рассказывает' not in result_text) else data['places'][i]['context'] + ' ' + result_text).replace(' ', ' ')
+            else:
+                print("Контейнер статьи не найден.")
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка при запросе: {e}")
+        except Exception as e:
+            print(f"Общая ошибка: {e}")
+    write_dictionary(data, 'data.json')
+
+
+async def base_links():
+    data = load_dictionary('base.json')
+    data['base'] = []
+    data['links'] = [i for i in data['links'] if 'en' not in i]
+    for url in data['links']:
+        resp = requests.get(url)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        main = soup.find('main')
+        if not main:
+            main = soup.find('article')
+        if not main:
+            main = soup.find('div', id='content') or soup.find('div', class_='content')
+        if not main:
+            main = soup.body
+        for selector in ['nav', 'header', 'footer', 'aside']:
+            for tag in main.find_all(selector):
+                tag.decompose()
+        for tag in main.find_all(
+                lambda t: (
+                        (t.has_attr('class') and any('menu' in c.lower() for c in t['class'])) or
+                        (t.has_attr('id') and 'menu' in t['id'].lower())
+                )
+        ):
+            tag.decompose()
+        text = main.get_text(separator='\n', strip=True)
+        data['base'].append(f'Ссылка: {url}. {text}')
+    write_dictionary(data, 'base.json')
 
 
 async def add_news():
@@ -362,6 +424,29 @@ async def add_news():
             data["number"] += 1
         except Exception:
             b = False
+    url = 'https://peterhofmuseum.ru/events/rss'
+    resp = requests.get(url)
+    resp.raise_for_status()
+    feed = feedparser.parse(resp.content)
+    blocks = []
+    for entry in feed.entries:
+        content = entry.summary
+        for raw in re.split(r'<hr\s*/?>', content, flags=re.IGNORECASE):
+            raw = raw.strip()
+            if not raw:
+                continue
+            soup = BeautifulSoup(raw, 'html.parser')
+            text = soup.get_text(separator=' ', strip=True)
+            photos = []
+            for img in soup.find_all('img'):
+                src = img.get('src')
+                if src:
+                    photos.append(src)
+            blocks.append({
+                'text': text,
+                'photos': photos
+            })
+    data['rss'] = blocks
     write_dictionary(data, 'news.json')
     print('News task done (add_news)')
     try:
@@ -855,9 +940,12 @@ async def main():
             api_key=getenv('AUTH')
         )
     )
-    bot.chroma_collection = init_chroma(remote=True)
-    # await add_news()
-    # create_or_update_chroma_collection(bot.chroma_collection)
+    bot.chroma_collection = init_chroma(remote=True, name='data')
+    bot.chroma_collection_news = init_chroma(remote=True, name='news')
+    bot.chroma_collection_base = init_chroma(remote=True, name='base')
+    # create_or_update_chroma_collection(bot.chroma_collection, 'data.json')
+    # create_or_update_chroma_collection(bot.chroma_collection_news, 'news.json')
+    # create_or_update_chroma_collection(bot.chroma_collection_base, 'base.json')
     asyncio.create_task(news_task())
     await dp.start_polling()
 

@@ -16,7 +16,7 @@ def get_links(text):
 
 import re
 
-def create_or_update_chroma_collection(collection):
+def create_or_update_chroma_collection(collection, data_path: str = 'data.json'):
     """
     Reads data from data.json, splits texts into chunks,
     and adds them to the Chroma collection.
@@ -27,13 +27,12 @@ def create_or_update_chroma_collection(collection):
     sdk = YCloudML(folder_id=getenv('FOLDER'), auth=getenv('AUTH'))
     embd = sdk.models.text_embeddings("doc")
     model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
-    de = DataEnlarger(llm=model, embd=embd, data_path='data.json')
+    de = DataEnlarger(llm=model, embd=embd, data_path=data_path)
     chunks = de.chunks
 
     for idx, chunk in enumerate(chunks):
         doc_id = f"doc_{idx}"
         image_url = get_links(chunk)
-        print(image_url)
         image_url = image_url[0] if len(image_url) > 0 else False
 
         collection.add(
@@ -58,7 +57,7 @@ class YandexEmbeddingFunction(EmbeddingFunction):
         return vectors
 
 
-def init_chroma(remote: bool = False):
+def init_chroma(remote: bool = False, name='data'):
     """
     Инициализирует коллекцию Chroma (получает или создаёт).
     Устанавливает функцию для эмбеддингов (yandex_embeddings).
@@ -72,7 +71,7 @@ def init_chroma(remote: bool = False):
     print(f'collections: {client.list_collections()}')
     embedding_fn = YandexEmbeddingFunction(embd_model)
     collection = client.get_or_create_collection(
-        name="peterhof_docs",
+        name=name,
         embedding_function=embedding_fn
     )
     print(collection)

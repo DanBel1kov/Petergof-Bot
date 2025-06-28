@@ -311,7 +311,7 @@ def embed(texts, embd):
     Returns:
     - numpy.ndarray: An array of embeddings for the given text documents.
     """
-    text_embeddings = [embd.run(text[:2000]) for text in texts]
+    text_embeddings = [embd.run(str(text)[:2000] if text else '') for text in texts]
 
     # text_embeddings = embd.embed_documents(texts)
     text_embeddings_np = np.array(text_embeddings)
