@@ -238,27 +238,33 @@ def build_search_query(question: str, dialog_history: str) -> str:
     return result.alternatives[0].text.strip()
 
 
-def retrieve_documents(query: str, use_objects: bool, use_base: bool, use_events: bool) -> list:
+def retrieve_documents(
+    query: str,
+    use_objects: bool,
+    use_base: bool,
+    use_events: bool,
+    objects_collection=None,
+    base_collection=None,
+    events_collection=None,
+) -> list:
     """Retrieve documents from selected RAG sources."""
     docs = []
+
     if use_objects:
-        collection = init_chroma()
-        if collection.count() == 0:
-            create_or_update_chroma_collection(collection)
-        res = collection.query(query_texts=[query], n_results=10)
+        collection = objects_collection or init_chroma(remote=True, name="data")
+        res = collection.query(query_texts=[query], n_results=20)
         docs.extend(res.get("documents", [[]])[0])
+
     if use_base:
-        try:
-            with open("tickets.json", "r", encoding="utf-8") as f:
-                docs.extend(json.load(f).get("data", [])[:10])
-        except Exception:
-            pass
+        collection = base_collection or init_chroma(remote=True, name="base")
+        res = collection.query(query_texts=[query], n_results=20)
+        docs.extend(res.get("documents", [[]])[0])
+
     if use_events:
-        try:
-            with open("news.json", "r", encoding="utf-8") as f:
-                docs.extend(json.load(f).get("news", [])[:10])
-        except Exception:
-            pass
+        collection = events_collection or init_chroma(remote=True, name="news")
+        res = collection.query(query_texts=[query], n_results=20)
+        docs.extend(res.get("documents", [[]])[0])
+
     return docs
 
 
@@ -271,11 +277,25 @@ def get_latest_news() -> str:
         return ""
 
 
-def generate_final_answer(question: str, dialog_history: str) -> tuple:
+def generate_final_answer(
+    question: str,
+    dialog_history: str,
+    objects_collection=None,
+    news_collection=None,
+    base_collection=None,
+) -> tuple:
     """End-to-end pipeline using classification and RAG."""
     labels = classify_sources(question, dialog_history)
     query = build_search_query(question, dialog_history)
-    docs = retrieve_documents(query, labels["objects"], labels["base"], labels["events"])
+    docs = retrieve_documents(
+        query,
+        labels["objects"],
+        labels["base"],
+        labels["events"],
+        objects_collection=objects_collection,
+        base_collection=base_collection,
+        events_collection=news_collection,
+    )
     context = "\n\n".join(docs)
     links = get_links(context)
     news_block = get_latest_news()
