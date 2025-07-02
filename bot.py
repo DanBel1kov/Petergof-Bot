@@ -93,6 +93,22 @@ async def get_answer_prompt(question, history, sdk, prompt_original=True, greeti
     links = get_links(relevant_context)
     llm_model = sdk.models.completions(model_name="yandexgpt", model_version="rc")
     llm_model = llm_model.configure(temperature=0.3)
+    
+    # Получаем текущую дату и день недели в московском часовом поясе
+    current_date = datetime.datetime.now(pytz.timezone("Europe/Moscow"))
+    formatted_date = current_date.strftime("%d.%m.%Y")
+    
+    # Получаем день недели на русском языке
+    weekdays_ru = {
+        0: "понедельник",
+        1: "вторник",
+        2: "среда",
+        3: "четверг",
+        4: "пятница",
+        5: "суббота",
+        6: "воскресенье"
+    }
+    weekday = weekdays_ru[current_date.weekday()]
 
     greeting_patterns = {
         'ru': re.compile(
@@ -148,6 +164,8 @@ async def get_answer_prompt(question, history, sdk, prompt_original=True, greeti
     if prompt_original:
         prompt = f'''
         Ты - виртуальный помощник по музею-заповеднику Петергоф.
+        
+        Сегодняшняя дата: {formatted_date}, {weekday}
 
         {greeting_instruction}
         {base_instructions}
@@ -162,6 +180,8 @@ async def get_answer_prompt(question, history, sdk, prompt_original=True, greeti
     else:
         prompt = f'''
         Ты - виртуальный помощник по музею-заповеднику Петергоф.
+        
+        Сегодняшняя дата: {formatted_date}, {weekday}
 
         {greeting_instruction}
         {base_instructions}
