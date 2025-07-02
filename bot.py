@@ -243,7 +243,13 @@ async def get_answer(question: str, user_id: int) -> tuple:
 
     links = []
     try:
-        answer_text, links = generate_final_answer(question, dialog_history)
+        answer_text, links = generate_final_answer(
+            question,
+            dialog_history,
+            bot.chroma_collection,
+            bot.chroma_collection_news,
+            bot.chroma_collection_base,
+        )
     except Exception as e:
         answer_text, links = await get_answer_prompt(question, dialog_history_2, sdk, False, greeting_style=greeting_style)
         links = await shorten_links(links, question, answer_text)
